@@ -1,9 +1,20 @@
-rtems 코드 확인할 것
-src/rtems/cpukit/libcsupport/src/termios.c
-src/rtems/bsps/shared/grlib/uart 파일들
-src/rtems/cpulit/include/rtems/termiostypes.h 퓨ㅏ일 확인해서
-uart데이터를 cfs로 가져올 수 있게끔 해보기 -> uart데이터를 char 형태로 가져오는데 이거를 
-src/rtems/bsps/bfin/shared/dev/uart.c
-src/rtems/bsps/include/grlib/apbuart~~팡ㄹ들 화ㅓㄱ인 
+volatile unsigned int uaddr *base = (uaddr*) 0x800000000u
+temp32 = base[0x000/4]
+base[0x000/4] = temp32 | 0x00000800
+& ~0x00000800
 
-__asm__ __volatile__(a: s(S): "s"());
+
+uint32 readbypasscache32 (uint32 addr){ 
+uint32 temp =0;
+__asm__ __volatile__(" lda[%1]1, %0 "
+: "=r"(temp)
+: "r"(addr));
+retuen temp
+}
+
+void writebypasscache32 (uint32 addr, uint32 value){ 
+uint32 temp =0;
+__asm__ __volatile__(" sta%0, [%1]1 "
+: 
+: "r"(value)), "r"(addr));
+}
