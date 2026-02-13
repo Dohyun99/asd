@@ -1,0 +1,158 @@
+NotebookLM 로고
+NASA cFS and COSMOS Integration Training Guide
+PRO
+출처
+채팅
+스튜디오
+🚀
+NASA cFS and COSMOS Integration Training Guide
+소스 3개
+이 자료는 NASA의 핵심 비행 소프트웨어(cFE) 아키텍처와 개발 지침을 상세히 기술하고 있습니다. 시스템의 신뢰성, 이식성, 재사용성을 극대화하기 위한 설계 원칙을 바탕으로, 실행 서비스, 소프트웨어 버스, 이벤트 및 테이블 서비스와 같은 주요 인터페이스의 기능을 설명합니다. 특히 하드웨어 의존성을 최소화하는 추상화 계층 활용법과 효율적인 메시지 통신 및 시간 관리 체계를 강조합니다. 또한 실제 개발자가 준수해야 할 디렉터리 구조, 헤더 파일 명명 규칙, 성능 최적화 등의 모범 사례를 포괄적으로 제공합니다. 결과적으로 이 소스들은 복잡한 우주 임무 수행을 위한 견고하고 유연한 소프트웨어 생태계 구축을 목적으로 합니다.
+
+2월 12일 목요일
+cfe table service 의 시퀀스 다이어그램을 그려줘
+
+제공된 문서를 바탕으로 cFE Table Service의 동작 과정을 나타내는 시퀀스 다이어그램을 작성해 드립니다.
+이 다이어그램은 지상국(Ground)에서 테이블 업데이트를 요청하고, 애플리케이션이 이를 처리하며, 데이터를 액세스하는 "테이블 로드 및 업데이트(Table Load and Update)" 시나리오를 중점적으로 표현했습니다.
+cFE Table Service 시퀀스 다이어그램
+sequenceDiagram
+    participant Ground as Ground (Operator)
+    participant CI as CI/Hardware
+    participant TBL as cFE Table Service
+    participant App as cFS Application
+    participant Buffer as Table Buffer (Memory)
+
+    Note over App, TBL: 1. 초기화 단계 (Initialization)
+    App->>TBL: CFE_TBL_Register (테이블 등록)
+    TBL-->>App: Table Handle 반환
+
+    Note over Ground, Buffer: 2. 테이블 업링크 및 로드 (Table Uplink & Load)
+    Ground->>CI: 테이블 이미지 파일 전송 (File Transfer)
+    CI->>Buffer: 파일 시스템에 저장
+    Ground->>TBL: CFE_TBL_LOAD_CC (테이블 로드 명령)
+    TBL->>Buffer: 파일에서 Inactive Buffer로 데이터 로드
+    Note right of TBL: 현재 Active Buffer는 변경되지 않음
+
+    Note over App, TBL: 3. 테이블 관리 및 업데이트 (Management & Update)
+    loop Housekeeping Cycle (주기적 실행)
+        App->>TBL: CFE_TBL_Manage (테이블 관리 요청)
+        
+        alt 검증 필요 (Validation Required)
+            TBL->>App: Validation Function 호출 (등록된 경우)
+            App-->>TBL: 검증 결과 반환 (Success/Fail)
+        end
+        
+        alt 업데이트 대기 중 (Update Pending)
+            TBL->>Buffer: Inactive <-> Active 버퍼 스왑 (Update)
+            Note right of TBL: 데이터가 활성화됨 (Committed)
+        end
+        
+        TBL-->>App: 결과 반환 (UPDATED or SUCCESS)
+    end
+
+    Note over App, Buffer: 4. 데이터 액세스 (Data Access)
+    App->>TBL: CFE_TBL_GetAddress (데이터 포인터 요청)
+    TBL-->>App: Active Buffer 메모리 주소 반환
+    App->>Buffer: 데이터 읽기 (Read Data)
+    App->>TBL: CFE_TBL_ReleaseAddress (포인터 해제)
+
+--------------------------------------------------------------------------------
+주요 단계별 상세 설명
+이 다이어그램은 소스 문서에 기술된 다음 과정들을 통합한 것입니다.
+1. 초기화 (Initialization)
+애플리케이션은 시작 시 CFE_TBL_Register API를 사용하여 테이블을 등록하고, cFE로부터 고유한 Table Handle을 받습니다. 이 핸들은 이후 모든 테이블 작업에 사용됩니다.
+2. 테이블 로드 (Table Load)
+• 파일 전송: 지상국(Ground)은 먼저 CFDP 등을 통해 새로운 테이블 이미지 파일을 온보드 파일 시스템으로 전송합니다.
+• 로드 명령: 지상국에서 CFE_TBL_LOAD_CC 명령을 보내면, Table Service는 지정된 파일의 내용을 읽어 메모리의 Inactive Buffer에 로드합니다,. 이때 애플리케이션이 사용 중인 Active Buffer는 영향을 받지 않습니다,.
+3. 테이블 관리 및 업데이트 (Management & Update)
+애플리케이션은 일반적으로 Housekeeping 주기마다 CFE_TBL_Manage API를 호출해야 합니다,. 이 API는 내부적으로 복잡한 과정을 단순화하여 처리합니다.
+• 검증 (Validation): 로드된 테이블에 대해 검증이 필요한 경우, CFE_TBL_Manage는 애플리케이션이 등록한 검증 함수(Validation Function)를 호출하여 데이터 무결성을 논리적으로 확인합니다,.
+• 업데이트 (Update): 검증이 완료되고 업데이트가 대기 중(Pending)이라면, Inactive Buffer와 Active Buffer를 교체(Swap)하여 새로운 데이터를 활성화합니다,.
+4. 데이터 액세스 (Accessing Data)
+애플리케이션은 테이블 데이터를 사용할 때 **CFE_TBL_GetAddress**를 호출하여 Active Buffer의 메모리 포인터를 획득합니다. 데이터 사용이 끝나면 반드시 **CFE_TBL_ReleaseAddress**를 호출하여 포인터를 해제해야 Table Service가 다음 업데이트를 수행할 수 있습니다.
+이 구조는 애플리케이션이 데이터 업데이트의 복잡한 과정을 직접 처리하지 않으면서도, 안전하게 공유 메모리 자원을 사용할 수 있도록 설계되었습니다.
+active buffer inactive buffer 가 뭔가
+
+제공된 문서를 바탕으로 cFE Table Service에서 사용되는 **Active Buffer(Active Table)**와 **Inactive Buffer(Inactive Table)**의 개념을 설명해 드리겠습니다.
+이 두 버퍼는 비행 중인 소프트웨어의 중단 없이 테이블(데이터)을 안전하게 업데이트하기 위해 사용되는 이중화된 메모리 구조를 의미합니다.
+1. 기본 개념 정의
+• Active Buffer (Active Table)
+    ◦ 정의: 현재 애플리케이션이 실행 중에 실제로 접근하여 읽고 사용하는 데이터 이미지입니다.
+    ◦ 역할: 애플리케이션은 Table Service로부터 이 Active Buffer의 메모리 포인터를 획득하여 데이터를 사용합니다.
+• Inactive Buffer (Inactive Table)
+    ◦ 정의: 지상(Ground) 운영자나 저장된 명령(Stored Command)에 의해 수정 작업이 이루어지는 '복사본' 또는 '대기 중인' 데이터 이미지입니다.
+    ◦ 역할: 현재 실행 중인 애플리케이션에 영향을 주지 않고, 새로운 데이터를 로드하거나 수정하는 작업 공간으로 사용됩니다.
+2. 상호 작용 및 업데이트 과정
+이 두 버퍼는 "로드(Load) → 검증(Validate) → 활성화(Activate)" 과정을 통해 상호 작용합니다.
+1. 로드 (Load): 지상에서 전송된 테이블 파일의 내용은 먼저 Inactive Buffer에 로드됩니다. 이때 애플리케이션이 보고 있는 Active Buffer는 변경되지 않습니다.
+2. 검증 (Validate): 운영자는 Inactive Buffer의 내용이 올바른지 검증 명령을 수행할 수 있습니다.
+3. 활성화 (Activate): 검증이 완료되면 'Activate' 명령을 통해 **Active Buffer와 Inactive Buffer의 내용을 교체(Swap)**합니다. 이로써 애플리케이션은 새로운 데이터를 사용하게 됩니다.
+3. 버퍼링 방식 (Single vs. Double)
+애플리케이션은 테이블을 등록할 때 메모리 사용량과 성능 요구사항에 따라 버퍼링 방식을 선택할 수 있습니다.
+• 싱글 버퍼 (Single Buffered Table)
+    ◦ 구조: 각 테이블은 전용 Active Buffer만 가지고, 수정 작업은 공유된(Shared) Inactive Buffer를 사용합니다.
+    ◦ 장점: 메모리 자원을 효율적으로 사용합니다 (Inactive Buffer를 여러 테이블이 공유함).
+    ◦ 단점: 테이블 업데이트 시 데이터를 복사하는 과정에서 애플리케이션이 순간적으로 지연될 수 있습니다.
+• 더블 버퍼 (Double Buffered Table)
+    ◦ 구조: 각 테이블이 Active Buffer와 동일한 크기의 전용 Inactive Buffer를 가집니다.
+    ◦ 장점: Inactive와 Active 간의 전환이 포인터 교체만으로 이루어지므로 매우 빠르고 결정적(deterministic)이며, 블로킹이 발생하지 않습니다. 인터럽트 서비스 루틴(ISR)이나 시간에 민감한 작업에 적합합니다.
+    ◦ 단점: 싱글 버퍼 방식에 비해 더 많은 메모리를 요구합니다.
+요약하자면, Active Buffer는 '현재 사용 중인 데이터', Inactive Buffer는 '수정 중이거나 대기 중인 데이터'를 의미하며, 이를 통해 시스템의 안정성을 유지하며 파라미터를 업데이트할 수 있습니다.
+테이블 서비스에 대해 3줄 요약
+
+cFE Table Service에 대한 3줄 요약입니다.
+1. 비행 소프트웨어의 재컴파일이나 패치 없이, 지상 명령만으로 애플리케이션의 파라미터(설정값, 계수 등)를 비행 중에 유연하게 업데이트하고 관리하는 기능을 제공합니다,.
+2. Active Buffer(현재 사용 중)와 Inactive Buffer(수정 대기 중)로 나뉜 이중화된 메모리 구조를 통해, 실행 중인 시스템의 중단 없이 안전하게 데이터를 변경할 수 있습니다,.
+3. 애플리케이션은 공유 메모리 핸들을 통해 테이블 데이터에 접근하며, **로드(Load) → 검증(Validate) → 활성화(Activate)**의 과정을 거쳐 데이터 무결성을 유지하며 업데이트를 수행합니다,,.
+시퀀스 다이어그램을 3줄 요약
+
+cFE Table Service 시퀀스 다이어그램에 대한 3줄 요약입니다.
+1. 초기화 및 로드: 애플리케이션이 테이블을 등록하면, 지상에서 전송된 테이블 파일 데이터는 실행 중인 시스템에 영향을 주지 않기 위해 먼저 Inactive Buffer에 로드됩니다.
+2. 검증 및 업데이트: 애플리케이션이 주기적으로 CFE_TBL_Manage를 호출하면, 로드된 데이터의 유효성을 검증한 후 Inactive Buffer와 Active Buffer를 교체(Swap)하여 데이터를 업데이트합니다.
+3. 데이터 접근: 애플리케이션은 GetAddress를 통해 Active Buffer의 메모리 포인터를 획득하여 데이터를 사용하며, 사용이 끝나면 반드시 포인터를 해제(Release)하여 안전한 메모리 공유를 보장합니다.
+오늘 • PM 6:04
+이번에는 excutive service
+
+시스템에서 답변할 수 없습니다.
+
+이번에는 excutive service
+
+**cFE Executive Services (ES)**는 cFE(Core Flight Executive)의 핵심 서비스로, 시스템의 초기화, 애플리케이션 관리, 메모리 관리, 시스템 로그 및 예외 처리를 담당합니다. 운영체제(OS)와 cFS 애플리케이션 사이의 주요 인터페이스 역할을 하며, 애플리케이션의 런타임 환경을 생성합니다.
+이전과 마찬가지로 동작 과정을 설명하는 시퀀스 다이어그램과 핵심 기능, 그리고 3줄 요약을 정리해 드립니다.
+cFE Executive Services (ES) 시퀀스 다이어그램
+이 다이어그램은 **시스템 부팅(Startup)**부터 애플리케이션이 로드되고 실행되는 과정을 보여줍니다.
+sequenceDiagram
+    participant OS as OS/Bootloader
+    participant ES as cFE Executive Services
+    participant Services as Other cFE Services (EVS, SB, etc.)
+    participant App as cFS Application
+    participant CDS as Critical Data Store
+
+    Note over OS, ES: 1. 시스템 초기화 (System Initialization)
+    OS->>ES: CFE_ES_Main (cFE 진입점 호출)
+    ES->>ES: 리셋 타입 결정 (Power-on vs Processor Reset)
+    ES->>ES: 파일 시스템 및 드라이버 초기화
+
+    Note over ES, Services: 2. cFE 서비스 시작 (Start Core Services)
+    ES->>Services: EVS, SB, TIME, TBL 서비스 순차 초기화
+    
+    Note over ES, App: 3. 애플리케이션 로드 (Load Applications)
+    ES->>ES: cfe_es_startup.scr 파일 읽기 (스크립트 파싱)
+    loop 스크립트 내 모든 앱에 대해
+        ES->>App: 애플리케이션/라이브러리 로드 및 진입점 호출
+        App->>ES: CFE_ES_RegisterApp (자동 등록)
+    end
+
+    Note over App, CDS: 4. 앱 실행 및 리소스 사용 (Execution)
+    App->>ES: CFE_ES_RegisterCDS (중요 데이터 저장소 확보)
+    ES->>CDS: 메모리 할당 또는 복구
+    
+    loop Run Loop (주기적 실행)
+        App->>ES: CFE_ES_RunLoop (실행 상태 확인)
+        ES-->>App: Keep Going / Exit 신호 반환
+        App->>App: 임무 수행 (메시지 수신/처리)
+    end
+
+    Note over App, ES: 5. 종료 또는 예외 발생 (Termination)
+    App->>ES: CFE_ES_ExitApp (종료 요청)
+    ES->>ES: 리소스 정리 및 로그 기록 (Exception
